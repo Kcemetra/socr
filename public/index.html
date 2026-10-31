@@ -1,0 +1,1996 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>СтройЖурнал — распознавание документов</title>
+<script src="/vendor/jszip.min.js"></script>
+<script src="/client-config.js"></script>
+<style>
+  :root {
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --border: #e2e8f0;
+    --border-strong: #cbd5e1;
+    --text: #0f172a;
+    --muted: #64748b;
+    --accent: #2563eb;
+    --accent-soft: #eff6ff;
+    --ok: #16a34a;
+    --warn: #d97706;
+    --warn-bg: #fefce8;
+    --warn-border: #fde047;
+    --err: #dc2626;
+    --dup-border: #f97316;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.45;
+    padding: 12px 14px 40px;
+    max-width: 1120px;
+    margin: 0 auto;
+  }
+
+  /* Минималистичные плоские кнопки */
+  button, .btn {
+    appearance: none;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+    user-select: none;
+  }
+  button:hover:not(:disabled) {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+  }
+  button:active:not(:disabled) {
+    background: #e2e8f0;
+  }
+  button.primary {
+    background: var(--text);
+    color: #ffffff;
+    border-color: var(--text);
+  }
+  button.primary:hover:not(:disabled) {
+    background: #1e293b;
+  }
+  button:disabled {
+    background: #f1f5f9 !important;
+    color: #94a3b8 !important;
+    border-color: var(--border) !important;
+    cursor: not-allowed;
+  }
+  input, select, textarea {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 0.85rem;
+    font-family: inherit;
+  }
+  input:disabled, select:disabled, textarea:disabled {
+    background: #f1f5f9;
+    color: #94a3b8;
+    cursor: not-allowed;
+  }
+  svg.ico {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    flex-shrink: 0;
+  }
+
+  /* 1. Верхняя шапка по референсу */
+  .topbar {
+    display: grid;
+    grid-template-columns: 42px 1fr 42px;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .icon-btn {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: 6px;
+  }
+  .title-box {
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    border-radius: 6px;
+    padding: 8px 14px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 1rem;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* 2. Компактная пунктирная зона загрузки */
+  .dropzone {
+    background: var(--surface);
+    border: 1.5px dashed var(--border-strong);
+    border-radius: 8px;
+    padding: 14px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    margin-bottom: 8px;
+  }
+  .dropzone:hover, .dropzone.dragover {
+    border-color: var(--text);
+    background: #f8fafc;
+  }
+  .dropzone-title {
+    font-size: 0.9rem;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+  .dropzone-icons {
+    display: flex;
+    justify-content: center;
+    gap: 28px;
+    color: var(--muted);
+  }
+  .dropzone-icons svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  /* 3. Кнопки Выбрать файлы / Сделать фото + Распознать */
+  .action-row-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .recognize-btn {
+    width: 100%;
+    padding: 11px 16px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  /* 4. Строка статуса */
+  .status-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.82rem;
+    color: var(--muted);
+    margin-bottom: 12px;
+    padding: 0 2px;
+  }
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+    margin-right: 6px;
+  }
+  .status-dot.busy { background: var(--warn); }
+  .status-dot.err { background: var(--err); }
+
+  /* Баннер дубликатов (если обнаружены повторки) */
+  .dup-banner {
+    display: none;
+    background: #fff7ed;
+    border: 1px solid #fdba74;
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    font-size: 0.83rem;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .dup-banner.show { display: flex; }
+
+  /* 5. Слайдер загруженных фото */
+  .slider-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 16px;
+  }
+  .slider-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .slider-title {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .slider-track {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    min-height: 92px;
+    align-items: center;
+  }
+  .slider-empty {
+    font-size: 0.82rem;
+    color: var(--muted);
+    width: 100%;
+    text-align: center;
+    padding: 18px 0;
+  }
+  .thumb-card {
+    position: relative;
+    width: 76px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .thumb-img-wrap {
+    width: 72px;
+    height: 72px;
+    border-radius: 6px;
+    border: 1.5px solid var(--border-strong);
+    overflow: hidden;
+    background: #f1f5f9;
+    cursor: pointer;
+    position: relative;
+  }
+  .thumb-card.done .thumb-img-wrap { border-color: var(--ok); }
+  .thumb-card.dup .thumb-img-wrap { border-color: var(--dup-border); border-width: 2px; }
+  .thumb-img-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .thumb-badge {
+    position: absolute;
+    bottom: 3px;
+    right: 3px;
+    font-size: 0.65rem;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(15, 23, 42, 0.75);
+    color: #fff;
+  }
+  .thumb-card.done .thumb-badge { background: var(--ok); }
+  .thumb-card.dup .thumb-badge { background: var(--dup-border); }
+  .thumb-name {
+    font-size: 0.7rem;
+    color: var(--muted);
+    max-width: 74px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+  }
+  .thumb-edit-controls {
+    display: none;
+    gap: 2px;
+    margin-top: 2px;
+  }
+  .slider-section.editing .thumb-edit-controls {
+    display: flex;
+  }
+  .mini-btn {
+    padding: 2px 5px;
+    font-size: 0.7rem;
+    border-radius: 4px;
+    line-height: 1;
+  }
+  .mini-btn.del { color: var(--err); border-color: #fca5a5; }
+
+  /* 6. Блок Распознанный Журнал по скетчу */
+  .journal-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .journal-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .journal-btn-row1 {
+    display: grid;
+    grid-template-columns: 1fr 1.35fr;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .journal-btn-row2 {
+    display: grid;
+    grid-template-columns: 1fr 1.2fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .table-wrap {
+    overflow-x: auto;
+    max-height: 68vh;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    background: var(--surface);
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: #f1f5f9;
+    color: var(--text);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    font-weight: 600;
+    font-size: 0.78rem;
+  }
+  tr.uncertain { background: var(--warn-bg); }
+  td[contenteditable="true"]:focus {
+    outline: 1.5px solid var(--text);
+    background: #fff;
+  }
+
+  /* Боковое меню слева (3 полоски) */
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.35);
+    z-index: 50;
+    display: none;
+  }
+  .backdrop.open { display: block; }
+  .left-drawer {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 300px;
+    max-width: 85vw;
+    background: var(--surface);
+    border-right: 1px solid var(--border-strong);
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .left-drawer.open { transform: translateX(0); }
+  .mode-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.86rem;
+    background: var(--surface);
+  }
+  .mode-item.active {
+    border-color: var(--text);
+    background: #f1f5f9;
+    font-weight: 600;
+  }
+  .stub-tag {
+    font-size: 0.68rem;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  /* Полноэкранная панель Настроек (справа/поверх почти на весь экран с листанием вниз) */
+  .settings-sheet {
+    position: fixed;
+    top: 10px; right: 10px; bottom: 10px; left: 10px;
+    max-width: 980px;
+    margin: 0 auto;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    z-index: 70;
+    display: none;
+    flex-direction: column;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+  }
+  .settings-sheet.open { display: flex; }
+  .settings-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-body {
+    padding: 16px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    flex: 1;
+  }
+  .s-block {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: #fcfcfd;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .s-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--muted);
+  }
+  .row-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+  .model-box {
+    flex: 1;
+    min-width: 250px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 10px;
+    background: var(--surface);
+    transition: opacity 0.15s;
+  }
+  .model-box.inactive {
+    opacity: 0.45;
+    background: #f1f5f9;
+  }
+  .chat-box {
+    height: 150px;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.82rem;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .log-box {
+    height: 150px;
+    overflow-y: auto;
+    background: #0f172a;
+    color: #e2e8f0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.76rem;
+    padding: 8px 10px;
+    border-radius: 6px;
+    line-height: 1.4;
+  }
+
+  /* Модальное окно Предпросмотра фото и Встроенной камеры */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.75);
+    z-index: 90;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-card {
+    background: var(--surface);
+    border-radius: 8px;
+    max-width: 92vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border-strong);
+  }
+  .modal-head {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.88rem;
+    font-weight: 600;
+  }
+  .modal-body {
+    padding: 12px;
+    overflow: auto;
+    text-align: center;
+    background: #0f172a;
+  }
+  .modal-body img, .modal-body video {
+    max-width: 100%;
+    max-height: 75vh;
+    object-fit: contain;
+  }
+
+/* Клиентская версия: исходная композиция интерфейса сохранена */
+#settingsSheet .settings-body > .s-block {display:none}
+#settingsSheet .settings-body > .s-block:nth-of-type(2){display:flex}
+#settingsSheet.dev-open .settings-body > .s-block:nth-of-type(1),
+#settingsSheet.dev-open .settings-body > .s-block:nth-of-type(6){display:flex}
+#settingsSheet.dev-open .settings-body > .s-block:nth-of-type(1) > .row-wrap:first-of-type{display:none}
+#settingsSheet .settings-body > .s-block:nth-of-type(2) > .row-wrap:first-of-type{display:none}
+#settingsSheet #clrChat,#settingsSheet #clrGlossary,#settingsSheet #clrKey {display:none}
+#settingsSheet label:has(#clrChat),#settingsSheet label:has(#clrGlossary),#settingsSheet label:has(#clrKey){display:none}
+#activeModelLabel{display:none}
+.tiny-dev-container{display:flex;justify-content:flex-end;margin-top:auto}
+#revealDevBtn{border:0;background:transparent;color:#e9eef4;font-size:12px;padding:6px 9px;opacity:.18}
+#revealDevBtn:hover{opacity:1;color:var(--muted)}
+.journal-btn-row1{grid-template-columns:1fr 1.3fr auto}
+.lab-screen[hidden]{display:none!important}
+.lab-note{font-size:.79rem;color:var(--muted);margin:8px 0}
+.lab-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.lab-row,.lab-buttons{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}
+.lab-row label{font-size:.8rem;display:flex;align-items:center;gap:5px}
+.lab-buttons button{font-size:.78rem}
+.lab-progress{display:flex;gap:10px;align-items:center;font-size:.76rem;color:var(--muted);margin:12px 0}
+.lab-progress progress{width:160px;max-width:35%;height:8px;accent-color:var(--accent)}
+.lab-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:8px}
+.lab-tile{border:1px solid var(--border);border-radius:7px;padding:5px;min-width:0}
+.lab-tile img{width:100%;height:105px;object-fit:contain;background:#f1f5f9}
+.lab-tile .caption{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+@media print{body{max-width:none;padding:0;background:#fff}.topbar,.dropzone,.action-row-2,.recognize-btn,.status-line,.dup-banner,.slider-section,.journal-btn-row1,.journal-btn-row2,.backdrop,.settings-sheet,.left-drawer,.modal-overlay,.lab-screen{display:none!important}#journalScreen{display:block!important}.journal-section{border:0;padding:0}.journal-title{text-align:center;font-size:15pt;margin:8px}th{position:static}table{font-size:9pt}.table-wrap{overflow:visible;max-height:none;border:0}tr{break-inside:avoid}}
+</style>
+</head>
+<body>
+
+<!-- Скрытые инпуты для выбора файлов и для нативной камеры -->
+<input type="file" id="fileInput" multiple accept="image/*" style="display:none">
+<input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none">
+
+<!-- 1. ВЕРХНЯЯ ШАПКА ПО РЕФЕРЕНСУ -->
+<div class="topbar">
+  <button class="icon-btn" id="openMenuBtn" title="Режимы документов">
+    <svg class="ico" viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+  <div class="title-box" id="docModeTitle">Журнал Входного Контроля</div>
+  <button class="icon-btn" id="openSettingsBtn" title="Настройки">
+    <svg class="ico" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+    </svg>
+  </button>
+</div>
+
+<div id="journalScreen">
+<!-- 2. КОМПАКТНОЕ ПОЛЕ С ПУНКТИРОМ -->
+<div class="dropzone" id="dropzoneArea">
+  <div class="dropzone-title">Нажмите или перетащите фото сюда</div>
+  <div class="dropzone-icons">
+    <svg class="ico" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    <svg class="ico" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+  </div>
+</div>
+
+<!-- 3. КНОПКИ ВЫБРАТЬ ФАЙЛЫ / СДЕЛАТЬ ФОТО И РАСПОЗНАТЬ -->
+<div class="action-row-2">
+  <button id="selectFilesBtn">
+    <svg class="ico" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+    Выбрать файлы
+  </button>
+  <button id="takePhotoBtn">
+    <svg class="ico" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    Сделать фото
+  </button>
+</div>
+
+<button class="primary recognize-btn" id="runOcrBtn" disabled>
+  <span>Распознать</span>
+  <svg class="ico" viewBox="0 0 24 24" style="fill:currentColor;"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+</button>
+
+<!-- 4. СТАТУС -->
+<div class="status-line">
+  <div><span class="status-dot" id="statusDot"></span><span id="statusText">Система готова</span></div>
+  <div id="activeModelLabel" style="font-size:0.76rem;"></div>
+</div>
+
+<!-- УВЕДОМЛЕНИЕ О ПОВТОРКАХ (ДУБЛИКАТАХ) -->
+<div class="dup-banner" id="dupBanner">
+  <div id="dupBannerText">⚠ Обнаружены повторные фото, которые уже загружены или распознаны.</div>
+  <div style="display:flex; gap:6px;">
+    <button class="mini-btn" id="skipDupsBtn">Удалить дубликаты</button>
+    <button class="mini-btn" id="reOcrDupsBtn">Перераспознать их</button>
+    <button class="mini-btn" id="keepDupsBtn">Оставить</button>
+  </div>
+</div>
+
+<!-- 5. СЛАЙДЕР ЗАГРУЖЕННЫХ ФОТО -->
+<div class="slider-section" id="sliderSection">
+  <div class="slider-header">
+    <span class="slider-title">Загруженные фото (<span id="photoCountLabel">0</span>)</span>
+    <button id="toggleEditSliderBtn" style="padding:4px 9px; font-size:0.78rem;">
+      <svg class="ico" style="width:14px;height:14px;" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      <span id="editSliderBtnText">Изменить</span>
+    </button>
+  </div>
+  <div class="slider-track" id="sliderTrack">
+    <div class="slider-empty">Нет загруженных фото</div>
+  </div>
+</div>
+
+<!-- 6. РАСПОЗНАННЫЙ ЖУРНАЛ -->
+<div class="journal-section">
+  <div class="journal-title" id="resultsTitle">Распознанный журнал</div>
+  <div class="journal-btn-row1">
+    <button id="copyTableBtn" title="Скопировать таблицу для быстрой вставки Ctrl+V в Excel или Google Таблицы">
+      <svg class="ico" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      <span id="copyBtnText">Копировать</span>
+    </button>
+    <button id="exportExcelBtn">
+      <svg class="ico" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <span id="xlsxBtnText">Скачать XLSX (0)</span>
+    </button>
+    <button id="exportPdfBtn" class="mini-btn" title="Сохранить таблицу в PDF через окно печати">PDF</button>
+  </div>
+  <div class="journal-btn-row2">
+    <button id="sortRowsBtn">⇅ Сорт</button>
+    <button id="filterWarnBtn">⚠ Спорные (0)</button>
+    <button id="clearTableBtn">Сбросить</button>
+  </div>
+
+  <div class="table-wrap">
+    <table id="dataTable">
+      <thead>
+        <tr>
+          <th>№ п/п</th>
+          <th>Наименование материалов и конструкций</th>
+          <th>Ед. изм.</th>
+          <th>Кол-во</th>
+          <th>Дата</th>
+          <th>№ и дата ТТН</th>
+          <th>Поставщик / Завод</th>
+          <th>Статус / Фото</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+</div>
+
+<section id="photoLabScreen" class="lab-screen" hidden>
+  <div class="journal-section">
+    <div class="lab-head"><strong>Обработка фотографий и PDF</strong><button id="labBackBtn" class="mini-btn">Вернуться к журналу</button></div>
+    <p class="lab-note">Обработка выполняется на вашем устройстве, без отправки файлов на сервер. Для уже сжатых фото используйте мягкий пресет.</p>
+    <div class="dropzone" id="labDropzone"><div class="dropzone-title">Выбрать или перетащить фотографии</div><div class="lab-note">JPG, PNG, WEBP и поддерживаемые браузером форматы</div></div>
+    <input type="file" id="labInput" multiple accept="image/*" hidden>
+    <div class="lab-row"><label>Обработка: <select id="labPreset"><option value="gentle" selected>Бережная — сжатые фотографии</option><option value="original">Исходный sc.py — чёткое Ч/Б</option><option value="binary">Ч/Б без агрессивного сглаживания</option><option value="gray">Оттенки серого</option></select></label>
+      <label>Размер: <select id="labMaxSide"><option value="0">Без уменьшения</option><option value="3000" selected>До 3000 px</option><option value="2048">До 2048 px</option></select></label>
+      <label>Порядок: <select id="labSort"><option value="name">Имя файла</option><option value="time">Дата файла</option></select></label>
+    </div>
+    <div class="lab-buttons"><button id="labProcessBtn" class="primary">Обработать фото</button><button id="labPdfBtn">Создать PDF</button><button id="labZipBtn">Скачать фотографии ZIP</button><button id="labToOcrBtn">Передать в журнал</button><button id="labClearBtn">Очистить список</button></div>
+    <div class="lab-progress"><progress id="labProgress" max="100" value="0"></progress><span id="labProgressText">Файлы не выбраны</span></div>
+    <div class="lab-grid" id="labGrid"></div>
+  </div>
+</section>
+
+<!-- ЗАТЕМНЕНИЕ ФОНА ДЛЯ МЕНЮ И НАСТРОЕК -->
+<div class="backdrop" id="backdrop"></div>
+
+<!-- БОКОВОЕ МЕНЮ СЛЕВА (ТРИ ПОЛОСКИ) -->
+<aside class="left-drawer" id="leftDrawer">
+  <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:10px;">
+    <span style="font-weight:600; font-size:0.95rem;">Тип документа</span>
+    <button class="icon-btn" id="closeMenuBtn" style="width:32px;height:32px;">✕</button>
+  </div>
+  <div class="mode-item active" data-mode="m17"><span>Журнал входного контроля (М-17)</span></div>
+  <div class="mode-item" data-mode="work"><span>Общий журнал работ</span></div>
+  <div class="mode-item" data-mode="lab"><span>Обработка фото и PDF</span></div>
+  <div style="margin-top:auto; font-size:0.75rem; color:var(--muted);">
+    СтройЖурнал • Клиентская версия
+  </div>
+</aside>
+
+<!-- ОКНО НАСТРОЕК (ПО ШЕСТЕРЕНКЕ) -->
+<section class="settings-sheet" id="settingsSheet">
+  <div class="settings-head">
+    <span style="font-weight:600; font-size:1rem;">Данные приложения</span>
+    <button id="closeSettingsBtn" style="padding:6px 12px;">Закрыть ✕</button>
+  </div>
+  <div class="settings-body">
+
+    <!-- БЛОК 1: СЕТЬ И API КЛЮЧ -->
+    <div class="s-block">
+      <div class="s-title">1. Маршрут запросов и API-ключ</div>
+      <div class="row-wrap">
+        <label style="font-size:0.84rem;">Маршрут:</label>
+        <select id="routeMode">
+          <option value="proxy" selected>Прокси сервера (IP хостинга — по умолчанию)</option>
+          <option value="direct">Прямой из браузера (IP пользователя)</option>
+        </select>
+        <label style="font-size:0.84rem; margin-left:8px;">Камера по кнопке «Сделать фото»:</label>
+        <select id="cameraModeSelect">
+          <option value="native" selected>Нативная камера телефона (Макс. качество матрицы)</option>
+          <option value="webrtc">Встроенная камера в браузере (Без выхода из вкладки)</option>
+        </select>
+      </div>
+
+      <div class="row-wrap" style="margin-top:4px;">
+        <label style="display:flex; align-items:center; gap:6px; font-size:0.85rem; cursor:pointer;">
+          <input type="checkbox" id="useCustomKeyToggle">
+          <span>Использовать свой API-ключ (по умолчанию выкл — используется встроенный ключ сервера)</span>
+        </label>
+      </div>
+
+      <div class="row-wrap" id="customKeyContainer" style="display:none;">
+        <input type="password" id="apiKeyInput" placeholder="Вставьте ключ AIza..." style="flex:1; min-width:210px;">
+        <button id="lockUnlockKeyBtn">Зафиксировать</button>
+        <button id="testKeyBtn">Проверить ключ</button>
+      </div>
+
+      <div style="font-size:0.8rem; display:flex; align-items:center; gap:6px;">
+        <span class="status-dot" id="keyStatusDot"></span>
+        <span id="keyStatusText">Статус ключа: проверка...</span>
+      </div>
+    </div>
+
+    <!-- БЛОК 2: СОХРАНЕНИЕ ДАННЫХ И ОЧИСТКА ХРАНИЛИЩА -->
+    <div class="s-block">
+      <div class="s-title">Очистка локальных данных</div>
+      <div class="row-wrap">
+        <label style="font-size:0.84rem;">Режим памяти данных:</label>
+        <select id="keyStorageMode">
+          <option value="local" selected>Запомнить навсегда (localStorage — по умолчанию)</option>
+          <option value="session">Только до закрытия вкладки (sessionStorage)</option>
+        </select>
+
+        <label style="font-size:0.84rem;">Хранение фото при перезагрузке (F5):</label>
+        <select id="photoStorageMode">
+          <option value="idb" selected>IndexedDB браузера (Хранить все фото даже после F5)</option>
+          <option value="thumbs">Хранить только легкие миниатюры</option>
+          <option value="ram">Только в RAM (Очищать фото при обновлении вкладки)</option>
+        </select>
+      </div>
+
+      <div style="border-top:1px solid var(--border); padding-top:8px; margin-top:4px;">
+        <div style="font-size:0.8rem; color:var(--muted); margin-bottom:6px;">Выберите, что именно очистить из локальной памяти браузера:</div>
+        <div class="row-wrap" style="font-size:0.82rem;">
+          <label><input type="checkbox" id="clrTable" checked> Таблицу текущего журнала</label>
+          <label><input type="checkbox" id="clrPhotos" checked> Фото текущего журнала</label>
+          <label><input type="checkbox" id="clrChat"> Историю мини-чата</label>
+          <label><input type="checkbox" id="clrGlossary"> Восстановить словарь</label>
+          <label><input type="checkbox" id="clrKey"> Сохраненный API-ключ</label>
+          <button id="selectiveClearBtn" style="padding:5px 10px; font-size:0.8rem; color:var(--err); border-color:#fca5a5;">Очистить выбранное</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- БЛОК 3: ДВУХУРОВНЕВЫЙ ВЫБОР МОДЕЛИ -->
+    <div class="s-block">
+      <div class="s-title">3. Выбор модели ИИ</div>
+      <div class="row-wrap" style="align-items:stretch;">
+        <!-- Список 1: Простой список -->
+        <div class="model-box" id="primaryModelBox">
+          <label style="display:flex; align-items:center; gap:6px; font-size:0.84rem; font-weight:600; margin-bottom:8px; cursor:pointer;">
+            <input type="radio" name="modelListSource" value="primary" id="radioPrimaryModel" checked>
+            <span>Основной список (Быстрый выбор)</span>
+          </label>
+          <select id="primaryModelSelect" style="width:100%;">
+            <option value="gemini-3.5-flash-lite" selected>Gemini 3.5 Flash Lite (gemini-3.5-flash-lite)</option>
+            <option value="gemini-3.6-flash">Gemini 3.6 Flash (gemini-3.6-flash)</option>
+            <option value="gemini-3.8-flash">Gemini 3.8 Flash (gemini-3.8-flash)</option>
+            <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite (gemini-3.1-flash-lite)</option>
+          </select>
+        </div>
+
+        <!-- Список 2: Полный список всех доступных моделей -->
+        <div class="model-box inactive" id="allModelBox">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <label style="display:flex; align-items:center; gap:6px; font-size:0.84rem; font-weight:600; cursor:pointer;">
+              <input type="radio" name="modelListSource" value="all" id="radioAllModel">
+              <span>Полный список доступных моделей</span>
+            </label>
+            <button id="refreshModelsBtn" style="padding:3px 7px; font-size:0.74rem;" title="Опросить Google API">🔄 API</button>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <select id="allModelSelect" style="flex:1;" disabled>
+              <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Gemini 3.5 Flash Lite)</option>
+              <option value="gemini-3.5-flash">gemini-3.5-flash (Gemini 3.5 Flash)</option>
+              <option value="gemini-3.6-flash">gemini-3.6-flash (Gemini 3.6 Flash)</option>
+              <option value="gemini-3.7-flash">gemini-3.7-flash (Gemini 3.7 Flash)</option>
+              <option value="gemini-3.8-flash">gemini-3.8-flash (Gemini 3.8 Flash)</option>
+              <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Gemini 3.1 Flash Lite)</option>
+              <option value="gemini-3.1-flash-lite-preview">gemini-3.1-flash-lite-preview (Gemini 3.1 Flash Lite Preview)</option>
+              <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (Gemini 3.1 Pro Preview)</option>
+              <option value="gemini-3.1-pro-preview-customtools">gemini-3.1-pro-preview-customtools (Gemini 3.1 Pro Custom Tools)</option>
+              <option value="gemini-3-flash-preview">gemini-3-flash-preview (Gemini 3 Flash Preview)</option>
+              <option value="gemini-4-argon">gemini-4-argon (Gemini 4 Argon)</option>
+              <option value="gemini-omni-1.1-flash">gemini-omni-1.1-flash (Gemini Omni 1.1 Flash)</option>
+              <option value="gemini-omni-flash-preview">gemini-omni-flash-preview (Gemini Omni Flash Preview)</option>
+              <option value="gemini-3.5-transcribe">gemini-3.5-transcribe (Gemini 3.5 Transcribe)</option>
+              <option value="gemini-flash-latest">gemini-flash-latest (Gemini Flash Latest)</option>
+              <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (Gemini Flash-Lite Latest)</option>
+              <option value="gemini-pro-latest">gemini-pro-latest (Gemini Pro Latest)</option>
+              <option value="gemini-nano-banana-2.1">gemini-nano-banana-2.1 (Nano Banana 2.1)</option>
+              <option value="gemini-3.1-flash-image">gemini-3.1-flash-image (Nano Banana 2)</option>
+              <option value="gemini-3.1-flash-lite-image">gemini-3.1-flash-lite-image (Nano Banana 2 Lite)</option>
+            </select>
+            <button id="addModelToPrimaryBtn" style="display:none; padding:6px 10px; font-size:0.78rem; white-space:nowrap;" class="primary" title="Добавить выбранную модель в первый список">
+              + В основной
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="row-wrap" style="font-size:0.82rem; margin-top:4px;">
+        <label>Фото за 1 запрос:</label>
+        <select id="batchSize" style="width:70px;">
+          <option value="1" selected>1</option>
+          <option value="2">2</option>
+        </select>
+        <label>Temperature:</label>
+        <input type="number" id="tempInput" value="0.1" step="0.05" min="0" max="1" style="width:65px;">
+        <label><input type="checkbox" id="autoFfill" checked> Авто-протяжка повторов сверху вниз (ffill)</label>
+      </div>
+    </div>
+
+    <!-- БЛОК 4: СИСТЕМНЫЙ ПРОМПТ, СЛОВАРЬ И JSON-СХЕМА -->
+    <div class="s-block">
+      <div class="s-title">4. Системный промпт, Вычищенный Словарь и JSON Schema</div>
+      <details open>
+        <summary style="cursor:pointer; font-size:0.85rem; font-weight:600;">Системный промпт (по умолчанию обновлен)</summary>
+        <textarea id="sysPrompt" style="min-height:145px;">Ты — экспертная система построчной оцифровки рукописных строительных журналов учёта материалов.
+
+КРИТИЧЕСКОЕ ПРАВИЛО ПОЛНОТЫ:
+На одной странице журнала обычно от 20 до 40 рукописных строк (например, № п/п с 202 по 228 или с 229 по 254).
+Ты ОБЯЗАН вернуть в массиве "rows" КАЖДУЮ строку страницы по отдельности (все 25-40 строк!). Категорически запрещено объединять строки или возвращать только первую строку!
+
+ПРАВИЛА ЗАПОЛНЕНИЯ ПОЛЕЙ:
+1. Если в ячейке стоят кавычки повтора (-«-, -"-) или ячейка пустая, потому что значение наследуется сверху вниз (один материал, дата, ТТН или поставщик на группу строк) — подставь актуальное значение сверху или из контекста предыдущей страницы (предыдущая страница идёт предыдущим фото строго по порядку страниц).
+2. Сверяй названия поставщиков и материалов со Справочником объекта. Если почерк похож на поставщика или материал из справочника, используй точное каноническое написание из справочника.
+3. Ставь needs_review = true ТОЛЬКО если конкретная цифра или слово объективно залиты чернилами, зачеркнуты, нечитаемы, либо если есть логические расхождения/ошибки заполнения самого журнала (например, нетипичная единица измерения или аномалия относительно прошлых записей — укажи причину в review_note). Если строка читается нормально или заполнена по повтору -«-, ставь needs_review = false.</textarea>
+      </details>
+
+      <details open>
+        <summary style="cursor:pointer; font-size:0.85rem; font-weight:600;">Словарь объекта (Очищен от дублей кавычек и ошибок + автопополнение)</summary>
+        <textarea id="glossaryBox" style="min-height:140px;">Поставщики: ООО "Партнёр", ООО "Еврострой", ООО "Гранд Бетон", ООО "ТД Тула-Сталь", ООО "Билдмейт", ООО "М.С.К.", ООО "Дикат", ООО "Сервис Газ", ООО "Строй-Агрегат", ООО "ТЕССА", ООО "Технониколь Строительные Системы", ООО "Русский Свет", ООО "Сфера-Снаб", ООО "РК Базис", ООО "Монолит-365", ООО "Все Инструменты", ООО "Пери", ООО "Профмастер", ООО "Комус", ООО "СТД Петрович"
+Материалы: Бетон В30 П4 F200 W10, Бетон В30 П4 F200 W4, Бетон В30 П4 F200, Бетон В30 П4 F150 W10, Бетон В15 П4 F150 W4, Бетон В12,5 П4 F100 W4, Раствор М150, Consolit Bars 110 сухая ремонтная смесь 30кг, Арматура А500С ⌀8, Арматура А500С ⌀10, Арматура А500С ⌀12, Арматура А500С ⌀16, Арматура А500С ⌀18, Арматура А500С ⌀20, Арматура А500С ⌀25, Арматура А500С ⌀28, Арматура А500С ⌀32, Арматура А240С ⌀6, Арматура А240С ⌀10, Каркас К-1, Каркас К-2, Каркас К-3, Проволока вязальная ⌀1,2 мм, Полоса 5х40 ст3 оц, Швеллер 200х100х5, Швеллер 100х50х5, Швеллер гн. 250х125х6, Уголок 75х75х6 мм, Уголок 50х50х5 мм, Лист профильный НС35 1000-0,5 оцинк. дл. 5м, Лист профильный С8 оцинк. 2м, Лист ПВ 5х1500х2000, Лист 2,5х1250х2500 риф., Брус 100х100х6000 2сорт, Доска 50х150х6000 2сорт, Доска 50х100х6000 2сорт, Доска 25х100х6000 2сорт, Фанера CHUDOFORM FORM-BIRCH FP1 CH (18x1220x2440), Балка ST 20K L=2,9м, Захват монтажный для опалубки 30-05, Опора «Стульчик» ЗИС, Крючки для вязки арматуры, Плёнка 200 мкм, Плёнка техническая п/э 200 мкм (300 м2), Пенополистирол Основит Т15, Пеноплекс Комфорт 1185х585х50 мм, Технониколь Техноруф В Экстра 1200х600х50 мм, Технониколь Фундамент, Геотекстиль нетканый иглопробивной (плотность 250г/м²), Шнур гернитовый ПРП 40.К40, Огнезащитная краска HITEK (10л), Провод СИП-4 4х95, Провод СИП-4 4х35, Провод СИП-4 4х16, Кабель КГтп-ХЛ 2х2,5, Кабель КГтп-ХЛ 4х2,5, Провод ПВС 2х1,5, Провод ПВ-3 1х6, Труба гофр. 20 мм, Труба гофрированная ПВХ d 25 мм (1 уп.-50 м), Труба гофрированная ПВХ d 32 мм, Труба гофрированная ПВХ d 40 мм (15 м), Труба гофр. 50 мм, Труба гофр. 63 мм, Клипса d=20 мм, Выкл. автомат. 3х полюс ВА 47-100 100А, Выкл. автомат. ВА 63А, Выключатель автомат. диф. тока (УЗО) 25А, Контактор модульный NCH8 40А, Счётчик Меркурий 230 ART CN 10-100А, Ящик силовой ЯРП-250А, Ящик с понижающим трансформатором ЯТП 0,25 220/12В, Корпус ЩРн-24 395х310х120 мм, Шина нулевая на DIN-изол. ШНИ 6х9-8-4-с, Зажим ответвительный изолированный ЗОИ 16-95/2,5-35, Зажим ответвительный прокалывающий Р1Х-95 16-95/1,5-10, Наконечник кабельн. ТА 35-10-8, Наконечник лужёный медный ТМЛ 25-10-8, Клемма с рычагом, Розетка 3-х 16А 250В, Вилка электрич. 16А, Колодка удлинителя 3-м с заглушками, Панель 36W-4000K, Прожектор светодиодн. СДО-8 300Вт 6500К, Прожектор светодиодн. СДО-7 100Вт 6500К, Фонарь сигнальный NRL-01 (ФС-12), Фотореле ФР601 2200ВА, Изолента класса В, Изолента ПВХ 15 мм (ж/з, желт., зелён., красн., чёрн.), Хомут кабельный 7,6х300 (уп. 100 шт), Хомут кабельный 7,6х500 (уп. 100 шт), Символ «Заземление» 30х30, Символ «Молния» 50х50х50, Станок для гибки арматуры Р42, Станок для резки арматуры Р42, Инвертор сварочный Ресанта САИ 250А, УШМ ⌀125 мм, УШМ ⌀230 мм, УШМ DCUT бесщёточная ⌀125мм 1650Вт, УШМ DCUT бесщёточная ⌀230мм 5000Вт, УШМ ⌀230 Espira-230, Перфоратор SDS max бесщёточный 1500Вт, Перфоратор SDS plus бесщёточный 1150Вт, Молоток отбойный DCUT SDS max 25Дж 1350Вт, Дрель-шуруповёрт Denzel, Пистолет пороховой монтажный DANKER DBP 30 137, Пистолет монтажный пороховой ПЦ-84, Нивелир оптический ADA PROF-X32 с поверк. рейка штатив, Крепление на металл RGK U4200 уровневое, Бадья для подачи бетона БН-1,5, Ящик для раствора ЯР-0,29, Ящик для раствора ЯР-1,0, Емкость 1м³ пластик., Базовый блок ВСП-250/1, Дополнительная секция ВСП-250/1, Строп текстильный 3,2т/3м, Строп HITCH 5т/3м, Горелка газовоздушн. рычажная ГВ-0,85, Пропан 50л, Сварочные электроды МР-3С ⌀3мм 5кг, Чашка алмаз. ⌀125 двухрядная, Алмазный диск 230х22,2, Круг отрезной по металлу Луга 230х22,2х2 мм, Пильный диск 230х24, Бур SDS max 12х600, Бур SDS max 25х600, Бур SDS max 32х600, Дюбель 6х37 мм, Дюбель-гвоздь 4,5х30, Дюбель монтажный 4,5х60, Патроны строительно-монтажные К-5 красные (100/1000 шт), Саморез прессшайба 4,2х51, Гвоздь 100х4 мм, Гвоздь 70х3 мм, Шланговый хомут 20-32мм, Рулетка 5м х 19мм, Рулетка 7,5м х 25мм, Шнурка 1,5 мм, Степлер мебельный тип скобы 53 4-14 мм, Скобы 14 мм (1000 шт), Пистолет для туб закрытый алюм. 380мм/600мл, Кувалда 1,0кг, Молоток кровельщика 600гр, Бокорезы «Мастер» 180мм, Пассатижи диэлектрические 1000В 180мм, Кусачки «Мини» 120мм, Набор диэлектрических отверток «Профи» НИО-06 (6шт), Клещи арматурные, Кисть флейцевая, Валик полиакрил 100мм, Щётка стальная с пластмассовой ручкой, Щётка для подметания, Черенок d=25мм, Маркер краска белая, Мелки белые 20 шт/уп, Лента сигнальная 50мм х 200м, Перчатки 2-й облив, Перчатки нитриловые, Костюм сварщика брезент. р. 52-54, Маска сварщика «Хамелеон» / Ресанта МС-6, Очки защитные, Огнетушитель ОП-5, Кронштейн ОУ-5, Щит пожарный, Ведро конус., Багор пожарн.</textarea>
+      </details>
+
+      <details>
+        <summary style="cursor:pointer; font-size:0.85rem; font-weight:600;">JSON Schema ответа API</summary>
+        <textarea id="schemaBox" style="min-height:110px;">{
+  "type": "OBJECT",
+  "properties": {
+    "rows": {
+      "type": "ARRAY",
+      "description": "Полный список ВСЕХ строк таблицы на странице (20-40 строк)",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "row_num": { "type": "INTEGER" },
+          "material": { "type": "STRING", "nullable": true },
+          "unit": { "type": "STRING", "nullable": true },
+          "quantity": { "type": "NUMBER", "nullable": true },
+          "date": { "type": "STRING", "nullable": true },
+          "invoice": { "type": "STRING", "nullable": true },
+          "supplier": { "type": "STRING", "nullable": true },
+          "needs_review": { "type": "BOOLEAN" },
+          "review_note": { "type": "STRING", "nullable": true }
+        },
+        "required": ["row_num", "material", "unit", "quantity", "needs_review"]
+      }
+    }
+  },
+  "required": ["rows"]
+}</textarea>
+      </details>
+
+      <details>
+        <summary style="cursor:pointer; font-size:0.85rem; font-weight:600;">Сырой ответ API (последний JSON)</summary>
+        <textarea id="rawDebugBox" readonly placeholder="Здесь появится чистый JSON ответа после распознавания..."></textarea>
+      </details>
+    </div>
+
+    <!-- БЛОК 5: МИНИ-ЧАТ ПО ТАБЛИЦЕ -->
+    <div class="s-block">
+      <div class="s-title">5. Мини-чат с ИИ по таблице</div>
+      <div class="chat-box" id="chatBox"></div>
+      <div style="display:flex; gap:6px;">
+        <input type="text" id="chatInput" placeholder="Например: исправь поставщика в строках 202-211 или посчитай сумму бетона..." style="flex:1;">
+        <button id="sendChatBtn" class="primary">Отправить</button>
+      </div>
+    </div>
+
+    <!-- БЛОК 6: СИСТЕМНЫЙ ЛОГ ВЫЗОВОВ И ОШИБОК -->
+    <div class="s-block">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span class="s-title">6. Журнал вызовов, событий и ошибок (System Log)</span>
+        <button id="clearLogBtn" style="padding:3px 8px; font-size:0.75rem;">Очистить лог</button>
+      </div>
+      <div class="log-box" id="sysLogBox"></div>
+    </div>
+
+    <div class="tiny-dev-container"><button id="revealDevBtn" title="Служебная диагностика" aria-label="Служебная диагностика">·</button></div>
+  </div>
+</section>
+
+<!-- МОДАЛЬНОЕ ОКНО ПРЕДПРОСМОТРА ФОТО -->
+<div class="modal-overlay" id="previewModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <span id="previewTitle">Предпросмотр фото</span>
+      <button id="closePreviewBtn" style="padding:4px 10px;">Закрыть ✕</button>
+    </div>
+    <div class="modal-body">
+      <img id="previewImg" src="" alt="Preview">
+    </div>
+  </div>
+</div>
+
+<!-- МОДАЛЬНОЕ ОКНО ВСТРОЕННОЙ КАМЕРЫ WEBRTC (если выбран режим WebRTC в настройках) -->
+<div class="modal-overlay" id="webrtcModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <span>Сделать фото (FullHD Камера)</span>
+      <button id="closeWebrtcBtn" style="padding:4px 10px;">Закрыть ✕</button>
+    </div>
+    <div class="modal-body">
+      <video id="webrtcVideo" autoplay playsinline></video>
+    </div>
+    <div style="padding:10px; display:flex; justify-content:center; background:var(--surface);">
+      <button class="primary" id="captureWebrtcBtn">📸 Сфотографировать лист</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY = 'stroy_client_v1_state';
+const IDB_NAME = 'StroyOcrPhotosDB';
+const IDB_STORE = 'photos';
+
+// По умолчанию сохраняем эталонный вычищенный словарь для кнопки сброса
+const DEFAULT_GLOSSARY = document.getElementById('glossaryBox').value;
+
+const state = {
+  photos: [], // { id, name, size, hash, dataUrl, status: 'queued'|'done', isDup: false }
+  rows: [],
+  chat: [{ role: 'bot', text: 'Готов к работе. Вы можете корректировать таблицу голосом/текстом через это окно.' }],
+  onlyWarn: false,
+  editingSlider: false,
+  keyLocked: false
+};
+
+
+const M17_PROMPT = document.getElementById('sysPrompt').value;
+const M17_SCHEMA = document.getElementById('schemaBox').value;
+const WORK_PROMPT = "Ты — экспертная система аккуратной оцифровки рукописного ОБЩЕГО ЖУРНАЛА РАБОТ (не журнала входного контроля).\n\nСтраница имеет ровно пять основных граф: 1) № п/п, 2) Дата выполнения работ, 3) Условия производства работ, 4) Наименование работ, выполненных в процессе строительства (длинное многострочное описание), 5) Должность, фамилия, инициалы и подпись представителя.\n\nКРИТИЧЕСКИ ВАЖНО: одна пронумерованная запись может занимать 10–20 физических строк! НЕ создавай отдельную строку JSON для каждой линейки на бумаге. Собирай все физические строки одного номера в один связный текст поля work_description. Каждому действительно указанному номеру записи соответствует ровно один объект.\n\nЕсли начало страницы продолжает запись с предыдущего листа и номер/дата отсутствуют, верни отдельную запись с row_num=null и пометкой needs_review=true, в review_note укажи «Продолжение предыдущей страницы». Не выдумывай номера, даты или фамилии.\n\nТекст графы 4 распознавай полно, сохраняя инженерные обозначения, оси, отметки и последовательность операций. Не пропускай строки, не сокращай длинные описания. Графу 5 передавай как текст подписи/ФИО без попытки воспроизвести росчерк. Когда значение нечитаемо — needs_review=true и понятный review_note. Верни строго объект {rows:[...]} согласно JSON Schema.\n\nНе путай напечатанную в шапке цифру 1/2/3/4/5 с номерами записей. Нумерованные записи ищи в первом столбце под шапкой.";
+const WORK_SCHEMA = "{\n  \"type\": \"OBJECT\",\n  \"properties\": {\n    \"rows\": {\n      \"type\": \"ARRAY\",\n      \"items\": {\n        \"type\": \"OBJECT\",\n        \"properties\": {\n          \"row_num\": {\n            \"type\": \"INTEGER\",\n            \"nullable\": true\n          },\n          \"work_date\": {\n            \"type\": \"STRING\",\n            \"nullable\": true\n          },\n          \"conditions\": {\n            \"type\": \"STRING\",\n            \"nullable\": true\n          },\n          \"work_description\": {\n            \"type\": \"STRING\",\n            \"nullable\": true\n          },\n          \"responsible\": {\n            \"type\": \"STRING\",\n            \"nullable\": true\n          },\n          \"needs_review\": {\n            \"type\": \"BOOLEAN\"\n          },\n          \"review_note\": {\n            \"type\": \"STRING\",\n            \"nullable\": true\n          }\n        },\n        \"required\": [\n          \"work_description\",\n          \"needs_review\"\n        ]\n      }\n    }\n  },\n  \"required\": [\n    \"rows\"\n  ]\n}";
+const MODES = {
+  m17:{title:'Журнал входного контроля (М-17)', columns:[['row_num','№ п/п'],['material','Наименование материалов и конструкций'],['unit','Ед. изм.'],['quantity','Кол-во'],['date','Дата'],['invoice','№ и дата ТТН'],['supplier','Поставщик / Завод']]},
+  work:{title:'Общий журнал работ',columns:[['row_num','№ п/п'],['work_date','Дата выполнения'],['conditions','Условия производства'],['work_description','Наименование выполненных работ'],['responsible','Должность, ФИО / подпись']]}
+};
+let activeMode = 'm17';
+let ocrBusy = false;
+const modeRows = {m17:[],work:[]};
+const photoSets = {m17:[],work:[]};
+function switchClientMode(id) {
+  if (ocrBusy) { alert('Завершите текущее распознавание перед сменой журнала.'); return; }
+  if (id === 'lab') { openPhotoLab(); return; }
+  if (!MODES[id]) return;
+  modeRows[activeMode]=state.rows;
+  photoSets[activeMode]=state.photos;
+  activeMode=id;
+  state.rows=modeRows[id] || [];
+  state.photos=photoSets[id] || [];
+  document.getElementById('sysPrompt').value=id==='m17'?M17_PROMPT:WORK_PROMPT;
+  document.getElementById('schemaBox').value=id==='m17'?M17_SCHEMA:WORK_SCHEMA;
+  document.getElementById('docModeTitle').textContent=MODES[id].title;
+  document.getElementById('resultsTitle').textContent='Распознанный журнал';
+  document.querySelectorAll('.mode-item').forEach(el=>el.classList.toggle('active',el.dataset.mode===id));
+  document.getElementById('journalScreen').hidden=false;
+  document.getElementById('photoLabScreen').hidden=true;
+  renderSlider();renderTable();
+  closeAllDrawers();saveAllSettings();
+}
+function openPhotoLab() {
+  document.getElementById('journalScreen').hidden=true;
+  document.getElementById('photoLabScreen').hidden=false;
+  document.getElementById('docModeTitle').textContent='Обработка фото и PDF';
+  document.querySelectorAll('.mode-item').forEach(el=>el.classList.toggle('active',el.dataset.mode==='lab'));
+  closeAllDrawers();
+}
+window.clientAddPhotos=async function (files) {
+  document.getElementById('journalScreen').hidden=false;
+  document.getElementById('photoLabScreen').hidden=true;
+  document.getElementById('docModeTitle').textContent=MODES[activeMode].title;
+  document.querySelectorAll('.mode-item').forEach(el=>el.classList.toggle('active',el.dataset.mode===activeMode));
+  await handleIncomingFiles(files); 
+};
+
+// --- СИСТЕМА ЛОГИРОВАНИЯ ---
+function appLog(msg, level = 'INFO') {
+  const box = document.getElementById('sysLogBox');
+  const time = new Date().toLocaleTimeString('ru-RU');
+  const color = level === 'ERROR' ? '#f87171' : (level === 'WARN' ? '#fbbf24' : '#38bdf8');
+  const line = document.createElement('div');
+  line.textContent = `[${time}] [${level}] ${msg}`;line.style.color=color;
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+document.getElementById('clearLogBtn').addEventListener('click', () => {
+  document.getElementById('sysLogBox').innerHTML = '';
+  appLog('Лог очищен пользователем');
+});
+
+// --- INDEXEDDB ДЛЯ СОХРАНЕНИЯ ФОТОГРАФИЙ ПОСЛЕ F5 ---
+function openPhotoDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = e => resolve(e.target.result);
+    req.onerror = e => reject(e.target.error);
+  });
+}
+
+const idbWriteCache=new Map();
+async function savePhotosToIDB() {
+ try{
+  photoSets[activeMode]=state.photos;
+  state.photos.forEach((p,i)=>{p.order=i;});
+  const db=await openPhotoDB();
+  await new Promise((resolve,reject)=>{
+   const tx=db.transaction(IDB_STORE,'readwrite'),store=tx.objectStore(IDB_STORE);
+   const current=new Set(state.photos.map(p=>p.id));
+   const cursor=store.openCursor();
+   cursor.onsuccess=()=>{const c=cursor.result;if(!c)return; const v=c.value;if((v.modeId||'m17')===activeMode&&!current.has(v.id)){store.delete(v.id);idbWriteCache.delete(v.id);}c.continue();};
+   for (const p of state.photos){
+     const snapshot=`${p.status}|${p.isDup}|${p.order||0}`;
+     if(idbWriteCache.get(p.id)!==snapshot){store.put({...p,modeId:activeMode});idbWriteCache.set(p.id,snapshot);}
+   }
+   tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+  });db.close();
+ }catch(e){appLog('Ошибка сохранения фото: '+e.message,'WARN');}
+}
+async function loadPhotosFromIDB(){
+ try{
+  const db=await openPhotoDB();const list=await new Promise((resolve,reject)=>{const tx=db.transaction(IDB_STORE,'readonly');const r=tx.objectStore(IDB_STORE).getAll();r.onsuccess=()=>resolve(r.result||[]);r.onerror=()=>reject(r.error);});db.close();
+  for(const id of Object.keys(MODES))photoSets[id]=[];
+  for(const p of list){const id=MODES[p.modeId]?p.modeId:'m17';photoSets[id].push(p);idbWriteCache.set(p.id,`${p.status}|${p.isDup}|${p.order||0}`);}
+  for(const id of Object.keys(MODES))photoSets[id].sort((a,b)=>(a.order||0)-(b.order||0));
+  state.photos=photoSets[activeMode];
+ }catch(e){appLog('Не удалось восстановить фото: '+e.message,'WARN');}
+}
+async function clearPhotosIDB(){
+ photoSets[activeMode]=[];state.photos=photoSets[activeMode];
+ try{const db=await openPhotoDB();await new Promise((resolve,reject)=>{const tx=db.transaction(IDB_STORE,'readwrite'),store=tx.objectStore(IDB_STORE);const r=store.openCursor();r.onsuccess=()=>{const c=r.result;if(c){if((c.value.modeId||'m17')===activeMode){store.delete(c.key);idbWriteCache.delete(c.key);}c.continue();}};tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();}catch(e){appLog('Ошибка очистки фото: '+e.message,'WARN');}
+}
+
+// --- НАВИГАЦИЯ: БОКОВОЕ МЕНЮ И ОКНО НАСТРОЕК ---
+const backdrop = document.getElementById('backdrop');
+const leftDrawer = document.getElementById('leftDrawer');
+const settingsSheet = document.getElementById('settingsSheet');
+
+function closeAllDrawers() {
+  leftDrawer.classList.remove('open');
+  settingsSheet.classList.remove('open');
+  backdrop.classList.remove('open');
+}
+
+document.getElementById('openMenuBtn').addEventListener('click', () => {
+  leftDrawer.classList.add('open');
+  backdrop.classList.add('open');
+});
+document.getElementById('closeMenuBtn').addEventListener('click', closeAllDrawers);
+
+document.getElementById('openSettingsBtn').addEventListener('click', () => {
+  settingsSheet.classList.add('open');
+  backdrop.classList.add('open');
+  checkApiKeyStatus();
+});
+document.getElementById('closeSettingsBtn').addEventListener('click', closeAllDrawers);
+backdrop.addEventListener('click', closeAllDrawers);
+
+// Режимы клиента
+for (const el of document.querySelectorAll('.mode-item')) el.addEventListener('click',()=>switchClientMode(el.dataset.mode));
+document.getElementById('revealDevBtn').addEventListener('click',()=>{
+ settingsSheet.classList.toggle('dev-open');
+ if (settingsSheet.classList.contains('dev-open')) checkApiKeyStatus();
+});
+document.getElementById('labBackBtn').addEventListener('click',()=>switchClientMode(activeMode));
+
+// --- УПРАВЛЕНИЕ API КЛЮЧОМ (ТОГГЛ + ЗАМОК + ИНДИКАТОР СТАТУСА) ---
+const useCustomKeyToggle = document.getElementById('useCustomKeyToggle');
+const customKeyContainer = document.getElementById('customKeyContainer');
+const apiKeyInput = document.getElementById('apiKeyInput');
+const lockUnlockKeyBtn = document.getElementById('lockUnlockKeyBtn');
+const keyStatusDot = document.getElementById('keyStatusDot');
+const keyStatusText = document.getElementById('keyStatusText');
+
+useCustomKeyToggle.addEventListener('change', () => {
+  customKeyContainer.style.display = useCustomKeyToggle.checked ? 'flex' : 'none';
+  saveAllSettings();
+  checkApiKeyStatus();
+});
+
+function setKeyLockedUI(locked) {
+  state.keyLocked = locked;
+  apiKeyInput.readOnly = locked;
+  apiKeyInput.style.background = locked ? '#f1f5f9' : '#ffffff';
+  lockUnlockKeyBtn.textContent = locked ? '🔒 Изменить' : 'Зафиксировать';
+}
+
+lockUnlockKeyBtn.addEventListener('click', () => {
+  if (!state.keyLocked && apiKeyInput.value.trim()) {
+    setKeyLockedUI(true);
+    saveAllSettings();
+    checkApiKeyStatus();
+  } else {
+    setKeyLockedUI(false);
+    apiKeyInput.focus();
+  }
+});
+
+document.getElementById('testKeyBtn').addEventListener('click', () => {
+  if (apiKeyInput.value.trim()) setKeyLockedUI(true);
+  saveAllSettings();
+  checkApiKeyStatus();
+});
+
+async function checkApiKeyStatus() {
+  const useCustom = useCustomKeyToggle.checked;
+  const customKey = apiKeyInput.value.trim();
+  const route = document.getElementById('routeMode').value;
+
+  keyStatusDot.className = 'status-dot busy';
+  keyStatusText.textContent = 'Проверка статуса ключа...';
+
+  try {
+    if (route === 'proxy' && window.location.protocol !== 'file:') {
+      const headers = (useCustom && customKey) ? { 'x-goog-api-key': customKey } : {};
+      const res = await fetch('/api/gemini?check=1', { headers });
+      const data = await res.json();
+      if (data.ok) {
+        keyStatusDot.className = 'status-dot';
+        keyStatusText.textContent = data.source === 'custom'
+          ? 'Личный ключ активен и проверен (через прокси)'
+          : 'Используется встроенный ключ сервера (активен)';
+        appLog(`Проверка ключа: ОК (${data.source})`);
+      } else {
+        keyStatusDot.className = 'status-dot err';
+        keyStatusText.textContent = `Ошибка ключа (${data.source}): ${data.message}`;
+        appLog(`Ошибка проверки ключа: ${data.message}`, 'WARN');
+      }
+    } else {
+      if (!useCustom || !customKey) {
+        keyStatusDot.className = 'status-dot err';
+        keyStatusText.textContent = 'Для прямого режима включите тоггл и впишите свой API-ключ';
+        return;
+      }
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${customKey}&pageSize=1`);
+      if (res.ok) {
+        keyStatusDot.className = 'status-dot';
+        keyStatusText.textContent = 'Личный ключ активен (прямой режим)';
+      } else {
+        keyStatusDot.className = 'status-dot err';
+        keyStatusText.textContent = 'Ключ недействителен или нет доступа с вашего IP';
+      }
+    }
+  } catch (e) {
+    keyStatusDot.className = 'status-dot err';
+    keyStatusText.textContent = 'Не удалось проверить ключ: ' + e.message;
+  }
+}
+
+// --- ВЫБОР МОДЕЛИ: ДВА СПИСКА (ПРОСТОЙ И ПОЛНЫЙ) ---
+const radioPrimaryModel = document.getElementById('radioPrimaryModel');
+const radioAllModel = document.getElementById('radioAllModel');
+const primaryModelBox = document.getElementById('primaryModelBox');
+const allModelBox = document.getElementById('allModelBox');
+const primaryModelSelect = document.getElementById('primaryModelSelect');
+const allModelSelect = document.getElementById('allModelSelect');
+const addModelToPrimaryBtn = document.getElementById('addModelToPrimaryBtn');
+
+function updateModelListsUI() {
+  const isPrimary = radioPrimaryModel.checked;
+  primaryModelSelect.disabled = !isPrimary;
+  allModelSelect.disabled = isPrimary;
+  primaryModelBox.classList.toggle('inactive', !isPrimary);
+  allModelBox.classList.toggle('inactive', isPrimary);
+  addModelToPrimaryBtn.style.display = isPrimary ? 'none' : 'inline-flex';
+  document.getElementById('activeModelLabel').textContent = '';
+  saveAllSettings();
+}
+
+function getActiveModel() {
+  return window.CLIENT_CONFIG?.model || 'gemini-3.5-flash-lite';
+}
+
+radioPrimaryModel.addEventListener('change', updateModelListsUI);
+radioAllModel.addEventListener('change', updateModelListsUI);
+primaryModelSelect.addEventListener('change', updateModelListsUI);
+allModelSelect.addEventListener('change', updateModelListsUI);
+
+// Кнопка добавления модели из второго списка в первый
+addModelToPrimaryBtn.addEventListener('click', () => {
+  const val = allModelSelect.value;
+  const text = allModelSelect.options[allModelSelect.selectedIndex]?.textContent || val;
+  if (!Array.from(primaryModelSelect.options).some(o => o.value === val)) {
+    const opt = document.createElement('option');
+    opt.value = val;
+    opt.textContent = text;
+    primaryModelSelect.appendChild(opt);
+    appLog(`Модель ${val} добавлена в основной список`);
+  }
+  primaryModelSelect.value = val;
+  radioPrimaryModel.checked = true;
+  updateModelListsUI();
+});
+
+// Подгрузка актуальных моделей из Google API во второй список
+document.getElementById('refreshModelsBtn').addEventListener('click', async () => {
+  const useCustom = useCustomKeyToggle.checked;
+  const customKey = apiKeyInput.value.trim();
+  const route = document.getElementById('routeMode').value;
+  try {
+    appLog('Запрос актуального списка моделей из Google API...');
+    let data;
+    if (route === 'proxy' && window.location.protocol !== 'file:') {
+      const headers = (useCustom && customKey) ? { 'x-goog-api-key': customKey } : {};
+      const res = await fetch('/api/gemini?models=1', { headers });
+      data = await res.json();
+    } else {
+      if (!customKey) return alert('Впишите API-ключ для прямого запроса');
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${customKey}`);
+      data = await res.json();
+    }
+    if (!data.models) throw new Error(data.error?.message || 'Ошибка получения списка моделей');
+    const curr = allModelSelect.value;
+    allModelSelect.innerHTML = '';
+    data.models
+      .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+      .forEach(m => {
+        const id = m.name.replace('models/', '');
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = `${id} (${m.displayName || ''})`;
+        if (id === curr) opt.selected = true;
+        allModelSelect.appendChild(opt);
+      });
+    appLog(`Загружено моделей из API: ${allModelSelect.options.length}`);
+    alert(`Список обновлен (${allModelSelect.options.length} моделей)`);
+  } catch (e) {
+    appLog('Ошибка обновления моделей: ' + e.message, 'ERROR');
+    alert('Ошибка: ' + e.message);
+  }
+});
+
+// --- ЗАГРУЗКА ФАЙЛОВ, КАМЕРА, ПРОВЕРКА ДУБЛИКАТОВ И СЛАЙДЕР ---
+const fileInput = document.getElementById('fileInput');
+const cameraInput = document.getElementById('cameraInput');
+const dropzoneArea = document.getElementById('dropzoneArea');
+
+dropzoneArea.addEventListener('click', () => fileInput.click());
+document.getElementById('selectFilesBtn').addEventListener('click', () => fileInput.click());
+
+dropzoneArea.addEventListener('dragover', e => { e.preventDefault(); dropzoneArea.classList.add('dragover'); });
+dropzoneArea.addEventListener('dragleave', () => dropzoneArea.classList.remove('dragover'));
+dropzoneArea.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzoneArea.classList.remove('dragover');
+  if (e.dataTransfer.files?.length) handleIncomingFiles(Array.from(e.dataTransfer.files));
+});
+
+fileInput.addEventListener('change', e => {
+  if (e.target.files?.length) handleIncomingFiles(Array.from(e.target.files));
+  fileInput.value = '';
+});
+
+cameraInput.addEventListener('change', e => {
+  if (e.target.files?.length) handleIncomingFiles(Array.from(e.target.files));
+  cameraInput.value = '';
+});
+
+// Кнопка «Сделать фото»: либо нативная камера телефона, либо WebRTC видоискатель
+let webrtcStream = null;
+document.getElementById('takePhotoBtn').addEventListener('click', async () => {
+  const mode = document.getElementById('cameraModeSelect').value;
+  if (mode === 'native') {
+    cameraInput.click();
+  } else {
+    try {
+      webrtcStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 2560 }, height: { ideal: 1920 } }
+      });
+      const video = document.getElementById('webrtcVideo');
+      video.srcObject = webrtcStream;
+      document.getElementById('webrtcModal').classList.add('open');
+    } catch (e) {
+      appLog('WebRTC камера недоступна, переключаем на нативную: ' + e.message, 'WARN');
+      cameraInput.click();
+    }
+  }
+});
+
+function stopWebrtc() {
+  if (webrtcStream) {
+    webrtcStream.getTracks().forEach(t => t.stop());
+    webrtcStream = null;
+  }
+  document.getElementById('webrtcModal').classList.remove('open');
+}
+document.getElementById('closeWebrtcBtn').addEventListener('click', stopWebrtc);
+
+document.getElementById('captureWebrtcBtn').addEventListener('click', () => {
+  const video = document.getElementById('webrtcVideo');
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth || 1920;
+  canvas.height = video.videoHeight || 1080;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+  const name = `cam_${new Date().toTimeString().slice(0,8).replace(/:/g,'-')}.jpg`;
+  addPhotoObject({
+    id: 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2,6),
+    name,
+    size: dataUrl.length,
+    hash: name + '_' + dataUrl.length,
+    dataUrl,
+    status: 'queued',
+    isDup: false
+  });
+  stopWebrtc();
+});
+
+// Быстрое сжатие и получение DataURL + отпечатка для поиска повторок
+async function processFileToPhotoObj(file, maxDim = 2048) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        if (width > height) { height = Math.round(height * (maxDim / width)); width = maxDim; }
+        else { width = Math.round(width * (maxDim / height)); height = maxDim; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      const keepPng=(file.type==='image/png' && /_processed/i.test(file.name));
+      const dataUrl = keepPng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', /_processed/i.test(file.name) ? .94 : .88);
+      const hash = `${file.name}_${file.size}`; // быстрый признак, не криптографический хеш
+      resolve({
+        id: 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+        name: file.name,
+        size: file.size,
+        hash,
+        dataUrl,
+        status: 'queued',
+        isDup: false
+      });
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function handleIncomingFiles(filesList) {
+  const sorted = filesList.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  let dupCount = 0;
+
+  for (const f of sorted) {
+    const pObj = await processFileToPhotoObj(f,/_processed/i.test(f.name)?3000:2048);
+    // Проверяем, было ли уже загружено фото с таким же именем и размером (или в распознанных строках)
+    const alreadyInSlider = state.photos.some(existing => existing.hash === pObj.hash || existing.name === pObj.name);
+    const alreadyInTable = state.rows.some(r => r.source_file === pObj.name);
+    if (alreadyInSlider || alreadyInTable) {
+      pObj.isDup = true;
+      dupCount++;
+    }
+    state.photos.push(pObj);
+  }
+
+  appLog(`Добавлено фото в слайдер: ${sorted.length} шт. (дубликатов: ${dupCount})`);
+  if (dupCount > 0) {
+    document.getElementById('dupBannerText').textContent = `⚠ Обнаружены повторные фото (${dupCount} шт.), которые уже есть в очереди или были распознаны ранее.`;
+    document.getElementById('dupBanner').classList.add('show');
+  }
+  await savePhotosToIDB();
+  renderSlider();
+}
+
+function addPhotoObject(pObj) {
+  state.photos.push(pObj);
+  savePhotosToIDB();
+  renderSlider();
+}
+
+// Действия баннера дубликатов
+document.getElementById('skipDupsBtn').addEventListener('click', () => {
+  state.photos = state.photos.filter(p => !p.isDup);
+  document.getElementById('dupBanner').classList.remove('show');
+  appLog('Дубликаты удалены из очереди пользователем');
+  savePhotosToIDB();
+  renderSlider();
+});
+
+document.getElementById('reOcrDupsBtn').addEventListener('click', () => {
+  state.photos.forEach(p => { if (p.isDup) { p.isDup = false; p.status = 'queued'; } });
+  document.getElementById('dupBanner').classList.remove('show');
+  appLog('Дубликаты помечены для повторного распознавания');
+  savePhotosToIDB();
+  renderSlider();
+});
+
+document.getElementById('keepDupsBtn').addEventListener('click', () => {
+  state.photos.forEach(p => { p.isDup = false; });
+  document.getElementById('dupBanner').classList.remove('show');
+  savePhotosToIDB();
+  renderSlider();
+});
+
+// Отрисовка слайдера фотографий
+function renderSlider() {
+  const track = document.getElementById('sliderTrack');
+  document.getElementById('photoCountLabel').textContent = state.photos.length;
+
+  // Кнопка «Распознать» активна только если есть хотя бы 1 фото
+  const queuedCount = state.photos.filter(p => p.status === 'queued').length;
+  const runBtn = document.getElementById('runOcrBtn');
+  runBtn.disabled = state.photos.length === 0 || ocrBusy;
+  runBtn.querySelector('span').textContent = queuedCount > 0
+    ? `Распознать (${queuedCount} в очереди)`
+    : (state.photos.length > 0 ? `Перераспознать все (${state.photos.length})` : 'Распознать');
+
+  if (!state.photos.length) {
+    track.innerHTML = '<div class="slider-empty">Нет загруженных фото</div>';
+    return;
+  }
+
+  track.innerHTML = '';
+  state.photos.forEach((p, idx) => {
+    const card = document.createElement('div');
+    card.className = 'thumb-card' + (p.status === 'done' ? ' done' : '') + (p.isDup ? ' dup' : '');
+
+    const safeName=String(p.name||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    const badgeText = p.isDup ? 'Повтор' : (p.status === 'done' ? '✓ ОК' : `#${idx + 1}`);
+    card.innerHTML = `
+      <div class="thumb-img-wrap" onclick="openPhotoPreview(${idx})" title="Нажмите для предпросмотра: ${safeName}">
+        <img src="${p.dataUrl}" alt="${safeName}">
+        <span class="thumb-badge">${badgeText}</span>
+      </div>
+      <div class="thumb-name" title="${safeName}">${safeName}</div>
+      <div class="thumb-edit-controls">
+        <button class="mini-btn" onclick="movePhoto(${idx}, -1)" ${idx === 0 ? 'disabled' : ''} title="Сдвинуть влево">◀</button>
+        <button class="mini-btn" onclick="movePhoto(${idx}, 1)" ${idx === state.photos.length - 1 ? 'disabled' : ''} title="Сдвинуть вправо">▶</button>
+        <button class="mini-btn del" onclick="removePhoto(${idx})" title="Удалить фото">✕</button>
+      </div>
+    `;
+    track.appendChild(card);
+  });
+}
+
+// Режим «Изменить» в слайдере (меняет фото местами или удаляет)
+document.getElementById('toggleEditSliderBtn').addEventListener('click', () => {
+  state.editingSlider = !state.editingSlider;
+  document.getElementById('sliderSection').classList.toggle('editing', state.editingSlider);
+  document.getElementById('editSliderBtnText').textContent = state.editingSlider ? 'Готово' : 'Изменить';
+});
+
+window.movePhoto = function(idx, dir) {
+  const target = idx + dir;
+  if (target < 0 || target >= state.photos.length) return;
+  const temp = state.photos[idx];
+  state.photos[idx] = state.photos[target];
+  state.photos[target] = temp;
+  savePhotosToIDB();
+  renderSlider();
+};
+
+window.removePhoto = function(idx) {
+  const removed = state.photos.splice(idx, 1)[0];
+  appLog(`Фото удалено из слайдера: ${removed?.name}`);
+  savePhotosToIDB();
+  renderSlider();
+};
+
+window.openPhotoPreview = function(idx) {
+  const p = state.photos[idx];
+  if (!p) return;
+  document.getElementById('previewTitle').textContent = `${p.name} (${p.status === 'done' ? 'Распознано' : 'В очереди'})`;
+  document.getElementById('previewImg').src = p.dataUrl;
+  document.getElementById('previewModal').classList.add('open');
+};
+document.getElementById('closePreviewBtn').addEventListener('click', () => {
+  document.getElementById('previewModal').classList.remove('open');
+});
+
+// --- ВЫЗОВ GEMINI API И РАСПОЗНАВАНИЕ ---
+function setStatus(text, type = 'ok') {
+  document.getElementById('statusText').textContent = `${text}`;
+  const dot = document.getElementById('statusDot');
+  dot.className = 'status-dot' + (type === 'busy' ? ' busy' : (type === 'err' ? ' err' : ''));
+}
+
+async function callGeminiGenerate(model, bodyObj) {
+  const useCustom = useCustomKeyToggle.checked;
+  const customKey = apiKeyInput.value.trim();
+  const route = document.getElementById('routeMode').value;
+
+  if (route === 'proxy' && window.location.protocol !== 'file:') {
+    const serialized = JSON.stringify(bodyObj);
+    if (new Blob([serialized]).size > 4 * 1024 * 1024) {
+      throw new Error('Слишком крупный запрос для бесплатной серверной функции. Уменьшите фото или выберите меньше страниц за запрос.');
+    }
+    const res = await fetch(`/api/gemini?model=${encodeURIComponent(model)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...((useCustom && customKey) ? { 'x-goog-api-key': customKey } : {})
+      },
+      body: serialized
+    });
+    return await res.json();
+  } else {
+    if (!customKey) throw new Error('Для прямого режима включите тоггл ключа в настройках и введите API-ключ!');
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${customKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bodyObj)
+    });
+    return await res.json();
+  }
+}
+
+function extractJsonFromCandidate(data) {
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  let text = '';
+  for (const p of parts) {
+    if (p.thought) continue;
+    if (p.text) text += p.text;
+  }
+  if (!text && parts[0]?.text) text = parts[0].text;
+  document.getElementById('rawDebugBox').value = text || JSON.stringify(data, null, 2);
+
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const parsed = JSON.parse(cleaned);
+  if (Array.isArray(parsed)) return parsed;
+  if (Array.isArray(parsed.rows)) return parsed.rows;
+  if (parsed.row_num !== undefined) return [parsed];
+  return [];
+}
+
+document.getElementById('runOcrBtn').addEventListener('click', async () => {
+  // Берем фото со статусом 'queued'. Если все уже 'done', перераспознаем все.
+  let targetPhotos = state.photos.filter(p => p.status === 'queued');
+  if (!targetPhotos.length) targetPhotos = [...state.photos];
+  if (!targetPhotos.length) return;
+
+  let responseSchema;
+  try {
+    responseSchema = JSON.parse(document.getElementById('schemaBox').value);
+  } catch (e) {
+    return alert('Ошибка в JSON Schema: ' + e.message);
+  }
+
+  const runBtn = document.getElementById('runOcrBtn');
+  runBtn.disabled = true;
+  ocrBusy = true;
+  const batchSize = parseInt(document.getElementById('batchSize').value, 10) || 1;
+  const model = getActiveModel();
+  const temp = parseFloat(document.getElementById('tempInput').value) || 0.1;
+  const sysPrompt = document.getElementById('sysPrompt').value;
+  const glossary = document.getElementById('glossaryBox').value;
+
+  try {
+    for (let i = 0; i < targetPhotos.length; i += batchSize) {
+      const batch = targetPhotos.slice(i, i + batchSize);
+      const label = batch.map(b => b.name).join(', ');
+      setStatus(`Распознавание ${i + 1}..${Math.min(i + batchSize, targetPhotos.length)} из ${targetPhotos.length} (${label})...`, 'busy');
+      const t0 = performance.now();
+      appLog(`Старт запроса OCR: файлы [${label}], модель=${model}`);
+
+      const parts = batch.map(p => ({
+        inline_data: { mime_type: p.dataUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg', data: p.dataUrl.split(',')[1] }
+      }));
+
+      const tailContext = state.rows.slice(-3).map(r => activeMode==='m17'
+       ? `Строка ${r.row_num}: ${r.material} | ${r.unit} | ${r.quantity} | ${r.date} | ${r.invoice} | ${r.supplier}`
+       : `Запись ${r.row_num ?? '?'}: ${String(r.work_description||'').slice(-800)}`
+      ).join('\n');
+
+      parts.push({
+        text: activeMode==='m17' ? `Извлеки ВСЕ рукописные строки таблицы с фото (${label}). На каждой странице от 20 до 40 строк — верни каждую строку отдельным объектом в массиве rows!\n\nСЛОВАРЬ ОБЪЕКТА:\n${glossary}\n${tailContext ? '\nПОСЛЕДНИЕ СТРОКИ ПРЕДЫДУЩЕЙ СТРАНИЦЫ:\n' + tailContext : ''}` : `Распознай записи ОБЩЕГО ЖУРНАЛА РАБОТ на фото (${label}). Каждая пронумерованная запись, даже если её описание занимает много линованных строк, должна быть ОДНИМ объектом rows. Сохрани целиком текст графы 4.\n${tailContext ? '\nКОНТЕКСТ ПРЕДЫДУЩЕЙ СТРАНИЦЫ:\n'+tailContext : ''}`
+      });
+
+      const data = await callGeminiGenerate(model, {
+        system_instruction: { parts: [{ text: sysPrompt }] },
+        contents: [{ role: "user", parts }],
+        generationConfig: {
+          temperature: temp,
+          maxOutputTokens: 16384,
+          responseMimeType: "application/json",
+          responseSchema: responseSchema
+        }
+      });
+
+      if (data.error) throw new Error(data.error.message);
+      const rows = extractJsonFromCandidate(data);
+      const dt = ((performance.now() - t0) / 1000).toFixed(1);
+      appLog(`Ответ получен за ${dt} сек: извлечено строк = ${rows.length}`);
+
+      batch.forEach(p => { p.status = 'done'; p.isDup = false; });
+      processIncomingRows(rows, label);
+      await savePhotosToIDB();
+      renderSlider();
+    }
+    setStatus(`Готово! Распознано строк: ${state.rows.length}`, 'ok');
+  } catch (err) {
+    setStatus(`Ошибка: ${err.message}`, 'err');
+    appLog(`Ошибка распознавания: ${err.message}`, 'ERROR');
+    alert('Ошибка при распознавании: ' + err.message);
+  } finally {
+    ocrBusy = false;
+    renderSlider();
+  }
+});
+
+// Нормализация кавычек и пробелов, чтобы в словаре не плодились дубликаты вида ООО „Партнёр“ и ООО "Партнёр"
+function normalizeEntityName(str) {
+  if (!str) return '';
+  return str
+    .replace(/[„“«»]/g, '"')
+    .replace(/\s+/g, ' ')
+    .replace(/,\s+(\d)/g, ',$1') // убирает разорванные пробелом десятичные дроби вроде "В12, 5" -> "В12,5"
+    .trim();
+}
+
+function updateGlossaryFromRows(rowsList) {
+  const glossaryEl = document.getElementById('glossaryBox');
+  const lines = glossaryEl.value.split('\n');
+  let supIdx = lines.findIndex(l => l.toLowerCase().startsWith('поставщики:'));
+  let matIdx = lines.findIndex(l => l.toLowerCase().startsWith('материалы:'));
+  if (supIdx === -1) { lines.push('Поставщики: '); supIdx = lines.length - 1; }
+  if (matIdx === -1) { lines.push('Материалы: '); matIdx = lines.length - 1; }
+
+  const parseList = (line) => line.split(':').slice(1).join(':').split(',').map(s => normalizeEntityName(s)).filter(Boolean);
+  const sups = new Map();
+  const mats = new Map();
+
+  parseList(lines[supIdx]).forEach(s => sups.set(s.toLowerCase(), s));
+  parseList(lines[matIdx]).forEach(m => mats.set(m.toLowerCase(), m));
+
+  let addedCount = 0;
+  rowsList.forEach(r => {
+    const s = normalizeEntityName(r.supplier);
+    const m = normalizeEntityName(r.material);
+    if (s && s.length > 2 && !s.includes('-«-') && !s.includes('-"-') && !sups.has(s.toLowerCase())) {
+      sups.set(s.toLowerCase(), s);
+      addedCount++;
+    }
+    if (m && m.length > 2 && !m.includes('-«-') && !m.includes('-"-') && !mats.has(m.toLowerCase())) {
+      mats.set(m.toLowerCase(), m);
+      addedCount++;
+    }
+  });
+
+  lines[supIdx] = 'Поставщики: ' + Array.from(sups.values()).join(', ');
+  lines[matIdx] = 'Материалы: ' + Array.from(mats.values()).join(', ');
+  glossaryEl.value = lines.join('\n');
+  if (addedCount > 0) appLog(`Словарь автоматически пополнен новыми позициями: +${addedCount}`);
+}
+
+function processIncomingRows(newRows, sourceLabel) {
+  if (activeMode === 'work') {
+    for (const row of newRows) {
+      const clean = {row_num:row.row_num ?? null,work_date:row.work_date||'',conditions:row.conditions||'',work_description:row.work_description||'',responsible:row.responsible||'',needs_review:!!row.needs_review,review_note:row.review_note||'',source_file:sourceLabel,id:crypto.randomUUID()};
+      if (!clean.work_description.trim()) continue;
+      const existing=state.rows.findIndex(r=>clean.row_num!==null && r.row_num===clean.row_num);
+      if (existing>=0) state.rows[existing]=clean; else state.rows.push(clean);
+    }
+    state.rows.sort((a,b)=>(Number(a.row_num)||Infinity)-(Number(b.row_num)||Infinity));
+    saveAllSettings();renderTable();return;
+  }
+  const doFfill = document.getElementById('autoFfill').checked;
+
+  for (let i = 0; i < newRows.length; i++) {
+    const r = newRows[i];
+    const prev = i > 0 ? newRows[i - 1] : (state.rows.length ? state.rows[state.rows.length - 1] : null);
+
+    if (doFfill && prev) {
+      if (!r.material || r.material.includes('-«-') || r.material.includes('-"-')) r.material = prev.material;
+      if (!r.unit || r.unit.includes('-«-')) r.unit = prev.unit;
+      if (!r.date || r.date.includes('-«-')) r.date = prev.date;
+      if (!r.invoice || r.invoice.includes('-«-')) r.invoice = prev.invoice;
+      if (!r.supplier || r.supplier.includes('-«-') || r.supplier.includes('-"-')) r.supplier = prev.supplier;
+    }
+
+    r.material = normalizeEntityName(r.material);
+    r.supplier = normalizeEntityName(r.supplier);
+    r.source_file = sourceLabel;
+
+    const existingIdx = state.rows.findIndex(x => x.row_num && x.row_num === r.row_num);
+    if (existingIdx !== -1) state.rows[existingIdx] = r;
+    else state.rows.push(r);
+  }
+
+  for (let i = state.rows.length - 1; i >= 0; i--) {
+    const curr = state.rows[i];
+    const next = state.rows[i + 1];
+    if (doFfill && next && curr.source_file === next.source_file) {
+      if (!curr.date && next.date) curr.date = next.date;
+      if (!curr.invoice && next.invoice) curr.invoice = next.invoice;
+      if (!curr.supplier && next.supplier) curr.supplier = next.supplier;
+    }
+  }
+
+  state.rows.sort((a, b) => (Number(a.row_num) || 0) - (Number(b.row_num) || 0));
+
+  for (let i = 1; i < state.rows.length; i++) {
+    const prev = state.rows[i - 1];
+    const curr = state.rows[i];
+    if (curr.row_num && prev.row_num && (curr.row_num - prev.row_num > 1)) {
+      curr.needs_review = true;
+      const gapNote = `Пропуск № (${prev.row_num}→${curr.row_num})`;
+      if (!curr.review_note || !curr.review_note.includes(gapNote)) {
+        curr.review_note = (curr.review_note ? curr.review_note + '; ' : '') + gapNote;
+      }
+    }
+  }
+
+  updateGlossaryFromRows(state.rows);
+  saveAllSettings();
+  renderTable();
+}
+
+function renderTable() {
+  const cols = MODES[activeMode].columns;
+  const thead=document.querySelector('#dataTable thead');
+  thead.replaceChildren();
+  const head=document.createElement('tr');
+  for(const [field,label] of cols){const th=document.createElement('th');th.textContent=label;head.appendChild(th);}
+  const st=document.createElement('th');st.textContent='Статус / Фото';head.appendChild(st);thead.appendChild(head);
+  const tbody=document.getElementById('tableBody');tbody.replaceChildren();
+  let warnings=0;
+  state.rows.forEach((r,idx)=>{
+    if(r.needs_review) warnings++;
+    if(state.onlyWarn&&!r.needs_review)return;
+    const tr=document.createElement('tr');if(r.needs_review)tr.className='uncertain';
+    for(const [field] of cols){
+      const td=document.createElement('td');td.contentEditable='true';td.textContent=r[field]??'';
+      td.addEventListener('blur',()=>{
+        const raw=td.textContent;
+        r[field]=field==='row_num'?(raw.trim()===''?null:Number(raw)||raw):field==='quantity'?(Number(raw)||raw):raw;
+        if(activeMode==='m17'&&(field==='material'||field==='supplier'))updateGlossaryFromRows([r]);
+        saveAllSettings();
+      });tr.appendChild(td);
+    }
+    const td=document.createElement('td');const note=document.createElement('span');
+    note.textContent=r.needs_review?'⚠ '+(r.review_note||'Проверить'):'✓ ОК';
+    note.style.color=r.needs_review?'var(--warn)':'var(--ok)';note.style.cursor='pointer';
+    note.title='Нажмите, чтобы изменить отметку';note.addEventListener('click',()=>{r.needs_review=!r.needs_review;saveAllSettings();renderTable();});
+    const source=document.createElement('small');source.textContent=' '+(r.source_file||'');source.style.color='var(--muted)';
+    td.append(note,source);tr.appendChild(td);tbody.appendChild(tr);
+  });
+  document.getElementById('xlsxBtnText').textContent=`Скачать XLSX (${state.rows.length})`;
+  document.getElementById('filterWarnBtn').textContent=`⚠ Спорные (${warnings})`;
+}
+function buildXlsxSheet(rows){
+  const escape=(str)=>String(str??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g,'');
+  const addr=(n)=>{let s='';do{s=String.fromCharCode(65+n%26)+s;n=Math.floor(n/26)-1;}while(n>=0);return s;};
+  let out=['<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'];
+  rows.forEach((row,i)=>{out.push(`<row r="${i+1}">`);row.forEach((value,j)=>{
+    if(value===null||value===undefined||value==='')return;
+    const ref=addr(j)+(i+1);
+    if(typeof value==='number'&&Number.isFinite(value))out.push(`<c r="${ref}"><v>${value}</v></c>`);
+    else out.push(`<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${escape(value)}</t></is></c>`);
+  });out.push('</row>');});out.push('</sheetData></worksheet>');return out.join('');
+}
+async function exportWorkbook(sheets,name){
+  if(typeof JSZip==='undefined')throw Error('Библиотека ZIP недоступна');
+  const zip=new JSZip();zip.file('[Content_Types].xml','<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'+sheets.map((_,i)=>`<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')+'</Types>');
+  zip.file('_rels/.rels','<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>');
+  const escape=(s)=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  zip.file('xl/workbook.xml','<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'+sheets.map((s,i)=>`<sheet name="${escape(s.name.slice(0,31))}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join('')+'</sheets></workbook>');
+  zip.file('xl/_rels/workbook.xml.rels','<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+sheets.map((_,i)=>`<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join('')+'</Relationships>');
+  sheets.forEach((s,i)=>zip.file(`xl/worksheets/sheet${i+1}.xml`,buildXlsxSheet(s.data)));
+  const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE'});saveBlob(blob,name);
+}
+function saveBlob(blob,filename){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);}
+function currentTableData(){return [MODES[activeMode].columns.map(p=>p[1]),...state.rows.map(r=>MODES[activeMode].columns.map(([k])=>r[k]??''))];}
+document.getElementById('copyTableBtn').addEventListener('click',async()=>{
+ if(!state.rows.length)return alert('Таблица пока пуста');
+ const tsv=currentTableData().map(row=>row.map(x=>String(x??'').replace(/[\t\n\r]/g,' ')).join('\t')).join('\n');
+ try{await navigator.clipboard.writeText(tsv);}catch(e){return alert('Не удалось скопировать: '+e.message);}
+ document.getElementById('copyBtnText').textContent='✓ Скопировано';setTimeout(()=>document.getElementById('copyBtnText').textContent='Копировать',1500);
+});
+document.getElementById('exportExcelBtn').addEventListener('click',async()=>{
+ if(!state.rows.length)return alert('Таблица пуста');
+ try{const sheets=[{name:activeMode==='m17'?'Журнал поступления':'Общий журнал работ',data:currentTableData()}];
+  if(activeMode==='m17'){
+   const map=new Map();state.rows.forEach(r=>{const k=(r.material||'')+'|'+(r.unit||'');const v=map.get(k)||[r.material||'',r.unit||'',0,0];v[2]++;v[3]+=Number(r.quantity)||0;map.set(k,v);});
+   sheets.push({name:'Сводка',data:[['Материал','Ед. изм.','Кол-во партий','Сумма'],...map.values()]});
+  }
+  await exportWorkbook(sheets,(activeMode==='m17'?'M17':'Obshchiy_zhurnal')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+ }catch(e){alert('Ошибка экспорта XLSX: '+e.message);}
+});
+document.getElementById('exportPdfBtn').addEventListener('click',()=>{
+ if(!state.rows.length)return alert('Таблица пуста');
+ window.print(); // В браузерном окне печати выберите «Сохранить как PDF».
+});
+document.getElementById('sortRowsBtn').addEventListener('click',()=>{state.rows.sort((a,b)=>(Number(a.row_num)||Infinity)-(Number(b.row_num)||Infinity));saveAllSettings();renderTable();});
+document.getElementById('filterWarnBtn').addEventListener('click',()=>{state.onlyWarn=!state.onlyWarn;renderTable();});
+document.getElementById('clearTableBtn').addEventListener('click',()=>{if(confirm('Очистить таблицу текущего журнала?')){state.rows=[];modeRows[activeMode]=state.rows;saveAllSettings();renderTable();}});
+
+// --- ВЫБОРОЧНАЯ ОЧИСТКА ХРАНИЛИЩА В НАСТРОЙКАХ ---
+document.getElementById('selectiveClearBtn').addEventListener('click', async () => {
+  const cTable = document.getElementById('clrTable').checked;
+  const cPhotos = document.getElementById('clrPhotos').checked;
+  const cChat = document.getElementById('clrChat').checked;
+  const cGlossary = document.getElementById('clrGlossary').checked;
+  const cKey = document.getElementById('clrKey').checked;
+
+  if (cTable) state.rows = [];
+  if (cPhotos) {
+    state.photos = [];
+    await clearPhotosIDB();
+  }
+  if (cChat) state.chat = [{ role: 'bot', text: 'История чата очищена.' }];
+  if (cGlossary) document.getElementById('glossaryBox').value = DEFAULT_GLOSSARY;
+  if (cKey) {
+    apiKeyInput.value = '';
+    useCustomKeyToggle.checked = false;
+    customKeyContainer.style.display = 'none';
+    setKeyLockedUI(false);
+    localStorage.removeItem('gemini_api_key');
+    sessionStorage.removeItem('gemini_api_key');
+  }
+
+  saveAllSettings();
+  renderSlider();
+  renderTable();
+  renderChat();
+  appLog('Выполнена выборочная очистка локальных данных');
+  alert('Выбранные данные успешно очищены!');
+});
+
+// --- МИНИ-ЧАТ С ИИ В НАСТРОЙКАХ ---
+function renderChat() {
+  const box = document.getElementById('chatBox');
+  box.innerHTML = state.chat.map(m =>
+    m.role === 'user'
+      ? `<div style="color:var(--accent)"><b>Вы:</b> ${m.text}</div>`
+      : `<div><b>ИИ:</b> ${m.text}</div>`
+  ).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+document.getElementById('sendChatBtn').addEventListener('click', async () => {
+  const inp = document.getElementById('chatInput');
+  const q = inp.value.trim();
+  if (!q) return;
+  state.chat.push({ role: 'user', text: q });
+  inp.value = '';
+  renderChat();
+  saveAllSettings();
+
+  const model = getActiveModel();
+  try {
+    appLog(`Запрос в мини-чат (${model}): ${q}`);
+    const data = await callGeminiGenerate(model, {
+      contents: [{
+        role: "user",
+        parts: [{
+          text: `Текущая таблица JSON:\n${JSON.stringify(state.rows)}\n\nЗапрос пользователя: "${q}".
+Верни строго JSON объект {"reply": "текст ответа", "updated_rows": [...массив строк если нужно изменить таблицу, иначе null...]}`
+        }]
+      }],
+      generationConfig: { responseMimeType: "application/json" }
+    });
+    if (data.error) throw new Error(data.error.message);
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    const txt = parts.filter(p => !p.thought && p.text).map(p => p.text).join('') || parts[0]?.text;
+    const parsed = JSON.parse(txt.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, ''));
+    state.chat.push({ role: 'bot', text: parsed.reply });
+    if (Array.isArray(parsed.updated_rows)) {
+      state.rows = parsed.updated_rows;
+      updateGlossaryFromRows(state.rows);
+      renderTable();
+    }
+    saveAllSettings();
+    renderChat();
+  } catch (e) {
+    state.chat.push({ role: 'bot', text: 'Ошибка: ' + e.message });
+    appLog('Ошибка мини-чата: ' + e.message, 'ERROR');
+    saveAllSettings();
+    renderChat();
+  }
+});
+
+// --- СОХРАНЕНИЕ И ЗАГРУЗКА НАСТРОЕК (ПО УМОЛЧАНИЮ: ПРОКСИ, ЗАПОМНИТЬ НАВСЕГДА, 3.5 FLASH LITE) ---
+function getTargetStorage() {
+  return document.getElementById('keyStorageMode').value === 'session' ? sessionStorage : localStorage;
+}
+
+function saveAllSettings() {
+  modeRows[activeMode]=state.rows;
+  localStorage.setItem(STORAGE_KEY,JSON.stringify({activeMode,modeRows,chat:state.chat,customKey:apiKeyInput.value.trim(),useCustomKey:useCustomKeyToggle.checked}));
+}
+function loadAllSettings() {
+  document.getElementById('routeMode').value='proxy';
+  document.getElementById('photoStorageMode').value='idb';
+  document.getElementById('keyStorageMode').value='local';
+  document.getElementById('cameraModeSelect').value='native';
+  radioPrimaryModel.checked=true;
+  primaryModelSelect.value=window.CLIENT_CONFIG?.model||'gemini-3.5-flash-lite';
+  const raw=localStorage.getItem(STORAGE_KEY);
+  if(raw)try{
+   const s=JSON.parse(raw);
+   if(s.modeRows&&typeof s.modeRows==='object')for(const id of Object.keys(MODES))if(Array.isArray(s.modeRows[id]))modeRows[id]=s.modeRows[id];
+   if(s.customKey){apiKeyInput.value=s.customKey;useCustomKeyToggle.checked=!!s.useCustomKey;customKeyContainer.style.display=useCustomKeyToggle.checked?'flex':'none';}
+   if(Array.isArray(s.chat))state.chat=s.chat;
+   activeMode=MODES[s.activeMode]?s.activeMode:'m17';
+  }catch(e){appLog('Ошибка восстановления данных: '+e.message,'WARN');}
+  state.rows=modeRows[activeMode];
+  document.getElementById('sysPrompt').value=activeMode==='m17'?M17_PROMPT:WORK_PROMPT;
+  document.getElementById('schemaBox').value=activeMode==='m17'?M17_SCHEMA:WORK_SCHEMA;
+  document.getElementById('docModeTitle').textContent=MODES[activeMode].title;
+  document.querySelectorAll('.mode-item').forEach(el=>el.classList.toggle('active',el.dataset.mode===activeMode));
+  updateModelListsUI();
+}
+
+['routeMode', 'cameraModeSelect', 'keyStorageMode', 'photoStorageMode', 'sysPrompt', 'glossaryBox', 'schemaBox'].forEach(id => {
+  document.getElementById(id).addEventListener('change', saveAllSettings);
+});
+
+// Инициализация приложения
+(async function init() {
+  loadAllSettings();
+  await loadPhotosFromIDB();
+  renderSlider();
+  renderTable();
+  renderChat();
+  appLog('Приложение запущено (режим: ' + document.getElementById('routeMode').value + ', модель: ' + getActiveModel() + ')');
+})();
+</script>
+<script src="/photo-lab.js" defer></script>
+</body>
+</html>
